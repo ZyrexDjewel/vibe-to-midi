@@ -1,0 +1,24 @@
+# Python Virtual Environment
+venv/
+ENV/
+env/
+
+# Python Cache & Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Environment Variables & Secrets
+.env
+*.env
+
+# Generated Output Files (Optional, keep repo clean)
+*.mid
+
+# IDE / OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
