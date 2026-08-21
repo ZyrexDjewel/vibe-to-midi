@@ -13,3 +13,8 @@ def test_missing_prompt_validation():
     """Verify that posting an empty request returns a 422 Unprocessable Entity."""
     response = client.post("/api/v1/generate", json={})
     assert response.status_code == 422
+
+def test_root_404():
+    """Verify that accessing root path returns 404 Not Found as expected."""
+    response = client.get("/")
+    assert response.status_code == 404
