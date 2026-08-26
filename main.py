@@ -18,7 +18,10 @@ app = FastAPI(
 
 # 1. Pydantic Schemas for Request & Response
 class VibeRequest(BaseModel):
-    prompt: str = Field(..., example="Dark synthwave arpeggiated bassline loop at 110 BPM in A minor")
+    prompt: str = Field(
+        ...,
+        json_schema_extra={"example": "Dark synthwave arpeggiated bassline loop at 110 BPM in A minor"}
+    )
 
 class MIDINote(BaseModel):
     pitch: int = Field(description="MIDI pitch from 0 to 127")
