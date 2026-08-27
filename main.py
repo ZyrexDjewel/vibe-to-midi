@@ -1,7 +1,7 @@
 import os
 import tempfile
 import pretty_midi
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from google import genai
 from google.genai import types
@@ -33,10 +33,15 @@ class SongStructure(BaseModel):
     bpm: int = Field(description="Tempo in BPM")
     notes: list[MIDINote] = Field(description="List of notes")
 
+def remove_file(path: str):
+    """Utility to remove temporary files after response streaming."""
+    if os.path.exists(path):
+        os.remove(path)
+
 
 # 2. API Endpoint
 @app.post("/api/v1/generate")
-async def generate_midi(request: VibeRequest):
+async def generate_midi(request: VibeRequest, background_tasks: BackgroundTasks):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY environment variable not set")
@@ -73,14 +78,17 @@ async def generate_midi(request: VibeRequest):
 
         midi.instruments.append(synth)
 
-        # Save to a temporary file
-        temp_dir = tempfile.gettempdir()
-        file_path = os.path.join(temp_dir, "generated_vibe.mid")
-        midi.write(file_path)
+        # Save to a unique temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mid")
+        midi.write(temp_file.name)
+        temp_file.close()
+
+        # Schedule automatic cleanup after response streaming completes
+        background_tasks.add_task(remove_file, temp_file.name)
 
         # Return file as downloadable attachment
         return FileResponse(
-            path=file_path,
+            path=temp_file.name,
             filename="vibe.mid",
             media_type="audio/midi"
         )
