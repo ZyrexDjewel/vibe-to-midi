@@ -2,6 +2,24 @@ import os
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from main import app
+from google.genai.errors import APIError
+
+@patch("main.genai.Client")
+def test_generate_midi_api_error(mock_genai_client):
+    """Verify that upstream Gemini API failures return 502 Bad Gateway."""
+    os.environ["GEMINI_API_KEY"] = "fake_test_api_key"
+
+    # Pass code and error payload dictionary to match Google SDK internals
+    mock_client_instance = MagicMock()
+    mock_client_instance.models.generate_content.side_effect = APIError(
+        429, {"message": "Quota exceeded"}
+    )
+    mock_genai_client.return_value = mock_client_instance
+
+    response = client.post("/api/v1/generate", json={"prompt": "Synth loop"})
+
+    assert response.status_code == 502
+    assert "Gemini API provider error" in response.json()["detail"]
 
 client = TestClient(app)
 
