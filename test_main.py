@@ -70,3 +70,27 @@ def test_generate_midi_success_mocked(mock_genai_client):
     assert response.headers["content-type"] == "audio/midi"
     assert "attachment" in response.headers.get("content-disposition", "")
     assert len(response.content) > 0  # Ensure non-empty binary MIDI stream
+
+@patch("main.genai.Client")
+def test_generate_midi_custom_instrument(mock_genai_client):
+    """Verify MIDI generation with a custom General MIDI program (e.g., Acoustic Grand Piano = 0)."""
+    os.environ["GEMINI_API_KEY"] = "fake_test_api_key"
+
+    mock_json_response = """{
+        "bpm": 100,
+        "notes": [{"pitch": 60, "start_time": 0.0, "end_time": 1.0, "velocity": 80}]
+    }"""
+
+    mock_response_obj = MagicMock()
+    mock_response_obj.text = mock_json_response
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.models.generate_content.return_value = mock_response_obj
+    mock_genai_client.return_value = mock_client_instance
+
+    # Request MIDI generation with Acoustic Grand Piano (program 0)
+    payload = {"prompt": "Chill piano melody", "instrument_program": 0}
+    response = client.post("/api/v1/generate", json=payload)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/midi"

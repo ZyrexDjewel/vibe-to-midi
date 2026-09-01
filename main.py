@@ -23,6 +23,13 @@ class VibeRequest(BaseModel):
         ...,
         json_schema_extra={"example": "Dark synthwave arpeggiated bassline loop at 110 BPM in A minor"}
     )
+    # Expand VibeRequest schema in main.py
+    instrument_program: int = Field(
+        default=38, 
+        ge=0, 
+        le=127, 
+        description="General MIDI program number (0-127). Defaults to 38 (Synth Bass 1)."
+    )
 
 class MIDINote(BaseModel):
     pitch: int = Field(description="MIDI pitch from 0 to 127")
@@ -84,9 +91,9 @@ async def generate_midi(request: VibeRequest, background_tasks: BackgroundTasks)
         )
 
     try:
-        # Build MIDI file in memory/temp location
+        # Build MIDI file using the user-requested instrument (or default to 38)
         midi = pretty_midi.PrettyMIDI(initial_tempo=song_data.bpm)
-        synth = pretty_midi.Instrument(program=38)  # Synth Bass
+        synth = pretty_midi.Instrument(program=request.instrument_program)  # Synth Bass
 
         for n in song_data.notes:
             note = pretty_midi.Note(
