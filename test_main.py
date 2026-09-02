@@ -94,3 +94,29 @@ def test_generate_midi_custom_instrument(mock_genai_client):
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/midi"
+
+@patch("main.genai.Client")
+def test_generate_midi_custom_instrument(mock_genai_client):
+    """Verify custom General MIDI instrument programs pass validation."""
+    os.environ["GEMINI_API_KEY"] = "fake_test_api_key"
+
+    mock_json_response = """{
+        "bpm": 120,
+        "notes": [{"pitch": 60, "start_time": 0.0, "end_time": 0.5, "velocity": 90}]
+    }"""
+
+    mock_response_obj = MagicMock()
+    mock_response_obj.text = mock_json_response
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.models.generate_content.return_value = mock_response_obj
+    mock_genai_client.return_value = mock_client_instance
+
+    # Test valid custom instrument (Acoustic Grand Piano = 0)
+    response = client.post("/api/v1/generate", json={"prompt": "Piano loop", "instrument_program": 0})
+    assert response.status_code == 200
+
+def test_invalid_instrument_program_validation():
+    """Verify that an out-of-range instrument program (> 127) fails Pydantic validation."""
+    response = client.post("/api/v1/generate", json={"prompt": "Test loop", "instrument_program": 150})
+    assert response.status_code == 422
