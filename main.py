@@ -44,6 +44,8 @@ async def log_requests(request: Request, call_next):
 class VibeRequest(BaseModel):
     prompt: str = Field(
         ...,
+        min_length=3,
+        max_length=500,
         json_schema_extra={"example": "Dark synthwave arpeggiated bassline loop at 110 BPM in A minor"}
     )
     # Expand VibeRequest schema in main.py

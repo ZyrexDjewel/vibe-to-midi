@@ -120,3 +120,13 @@ def test_invalid_instrument_program_validation():
     """Verify that an out-of-range instrument program (> 127) fails Pydantic validation."""
     response = client.post("/api/v1/generate", json={"prompt": "Test loop", "instrument_program": 150})
     assert response.status_code == 422
+
+def test_prompt_length_validation():
+    """Verify that empty strings or excessively long prompts trigger a 422 error."""
+    # Prompt too short
+    res_short = client.post("/api/v1/generate", json={"prompt": "hi"})
+    assert res_short.status_code == 422
+
+    # Prompt too long
+    res_long = client.post("/api/v1/generate", json={"prompt": "a" * 501})
+    assert res_long.status_code == 422
