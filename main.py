@@ -1,7 +1,9 @@
 import os
+import time
+import logging
 import tempfile
 import pretty_midi
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse
 from google import genai
 from google.genai import types
@@ -11,11 +13,32 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Automatically loads variables from .env into os.environ
 
+# Configure structured logging format
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("vibe-to-midi")
+
 app = FastAPI(
     title="Vibe-to-MIDI API",
     description="Generate MIDI files from text prompts using Gemini structured output.",
     version="1.0.0"
 )
+
+# Request execution timer & status logger middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    response = await call_next(request)
+    duration = round((time.time() - start_time) * 1000, 2)
+    
+    logger.info(
+        f"Method={request.method} Path={request.url.path} "
+        f"Status={response.status_code} Duration={duration}ms"
+    )
+    return response
 
 # 1. Pydantic Schemas for Request & Response
 class VibeRequest(BaseModel):
@@ -52,7 +75,11 @@ def remove_file(path: str):
 async def generate_midi(request: VibeRequest, background_tasks: BackgroundTasks):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=500, detail="GEMINI_API_KEY environment variable not set")
+        logger.error("GEMINI_API_KEY is missing from environment variables.")
+        raise HTTPException(
+            status_code=500,
+            detail="Server configuration error: GEMINI_API_KEY environment variable missing"
+            )
 
     try:
         # Initialize Gemini Client
@@ -73,18 +100,21 @@ async def generate_midi(request: VibeRequest, background_tasks: BackgroundTasks)
 
     except APIError as e:
         # Handles upstream Gemini API errors (rate limits, bad keys, service outages)
+        logger.warning(f"Gemini API returned error: {e.message}")
         raise HTTPException(
             status_code=502,
             detail=f"Gemini API provider error: {e.message}"
         )
     except ValueError as e:
         # Handles cases where returned output fails Pydantic schema parsing
+        logger.warning(f"Pydantic validation error: {str(e)}")
         raise HTTPException(
             status_code=422,
             detail=f"Failed to parse AI output into valid MIDI schema: {str(e)}"
         )
     except Exception as e:
         # Fallback catch-all for unexpected internal runtime failures
+        logger.error(f"Unexpected error during generation: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"Internal service error during generation: {str(e)}"
