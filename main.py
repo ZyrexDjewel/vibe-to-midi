@@ -27,6 +27,15 @@ app = FastAPI(
     version="1.0.0"
 )
 
+@app.get("/health", tags=["System"])
+async def health_check():
+    """Endpoint for uptime monitors and container health checks."""
+    return {
+        "status": "healthy",
+        "service": "vibe-to-midi",
+        "version": "1.0.0"
+    }
+
 # Request execution timer & status logger middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

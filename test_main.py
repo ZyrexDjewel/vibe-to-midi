@@ -130,3 +130,13 @@ def test_prompt_length_validation():
     # Prompt too long
     res_long = client.post("/api/v1/generate", json={"prompt": "a" * 501})
     assert res_long.status_code == 422
+
+def test_health_check_endpoint():
+    """Verify that the health check endpoint returns 200 OK and healthy status."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "healthy",
+        "service": "vibe-to-midi",
+        "version": "1.0.0"
+    }
