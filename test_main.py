@@ -140,3 +140,16 @@ def test_health_check_endpoint():
         "service": "vibe-to-midi",
         "version": "1.0.0"
     }
+
+@patch("main.genai.Client")
+def test_global_exception_handler(mock_genai_client):
+    """Verify that unhandled server errors return formatted 500 JSON payloads."""
+    client_no_raise = TestClient(app, raise_server_exceptions=False)
+
+    @app.get("/test-unhandled-error")
+    def trigger_crash():
+        raise RuntimeError("Unhandled crash")
+
+    response = client_no_raise.get("/test-unhandled-error")
+    assert response.status_code == 500
+    assert response.json() == {"detail": "An unexpected internal server error occurred."}

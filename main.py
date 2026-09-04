@@ -4,7 +4,7 @@ import logging
 import tempfile
 import pretty_midi
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
@@ -26,6 +26,15 @@ app = FastAPI(
     description="Generate MIDI files from text prompts using Gemini structured output.",
     version="1.0.0"
 )
+
+# Global exception handler for unexpected 500 runtime errors
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception on {request.url.path}: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An unexpected internal server error occurred."}
+    )
 
 @app.get("/health", tags=["System"])
 async def health_check():
@@ -90,7 +99,7 @@ async def generate_midi(request: VibeRequest, background_tasks: BackgroundTasks)
         raise HTTPException(
             status_code=500,
             detail="Server configuration error: GEMINI_API_KEY environment variable missing"
-            )
+        )
 
     try:
         # Initialize Gemini Client
@@ -134,7 +143,7 @@ async def generate_midi(request: VibeRequest, background_tasks: BackgroundTasks)
     try:
         # Build MIDI file using the user-requested instrument (or default to 38)
         midi = pretty_midi.PrettyMIDI(initial_tempo=song_data.bpm)
-        synth = pretty_midi.Instrument(program=request.instrument_program)  # Synth Bass
+        synth = pretty_midi.Instrument(program=request.instrument_program)
 
         for n in song_data.notes:
             note = pretty_midi.Note(
