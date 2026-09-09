@@ -10,6 +10,10 @@ from google.genai import types
 from google.genai.errors import APIError
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from fastapi import Request
 
 load_dotenv()  # Automatically loads variables from .env into os.environ
 
@@ -26,6 +30,10 @@ app = FastAPI(
     description="Generate MIDI files from text prompts using Gemini structured output.",
     version="1.0.0"
 )
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Global exception handler for unexpected 500 runtime errors
 @app.exception_handler(Exception)
@@ -92,7 +100,8 @@ def remove_file(path: str):
 
 # 2. API Endpoint
 @app.post("/api/v1/generate")
-async def generate_midi(request: VibeRequest, background_tasks: BackgroundTasks):
+@limiter.limit("5/minute")
+async def generate_midi(request: Request, payload: VibeRequest, background_tasks: BackgroundTasks):
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         logger.error("GEMINI_API_KEY is missing from environment variables.")
@@ -108,7 +117,7 @@ async def generate_midi(request: VibeRequest, background_tasks: BackgroundTasks)
         # Generate structured note array
         response = client.models.generate_content(
             model='gemini-3.6-flash',
-            contents=request.prompt,
+            contents=payload.prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=SongStructure,
@@ -143,7 +152,7 @@ async def generate_midi(request: VibeRequest, background_tasks: BackgroundTasks)
     try:
         # Build MIDI file using the user-requested instrument (or default to 38)
         midi = pretty_midi.PrettyMIDI(initial_tempo=song_data.bpm)
-        synth = pretty_midi.Instrument(program=request.instrument_program)
+        synth = pretty_midi.Instrument(program=payload.instrument_program)
 
         for n in song_data.notes:
             note = pretty_midi.Note(
