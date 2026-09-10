@@ -1,7 +1,7 @@
 import os
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
-from main import app
+from main import app, limiter
 from google.genai.errors import APIError
 
 @patch("main.genai.Client")
@@ -153,3 +153,28 @@ def test_global_exception_handler(mock_genai_client):
     response = client_no_raise.get("/test-unhandled-error")
     assert response.status_code == 500
     assert response.json() == {"detail": "An unexpected internal server error occurred."}
+
+def test_generate_midi_rate_limit(monkeypatch):
+    """Verify that exceeding 5 requests per minute returns HTTP 429 Too Many Requests."""
+    # Reset rate limiter storage so previous test runs don't interfere
+    limiter.reset()
+
+    mock_response = MagicMock()
+    mock_response.text = '{"bpm": 120, "notes": [{"pitch": 60, "start_time": 0.0, "end_time": 1.0, "velocity": 100}]}'
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.models.generate_content.return_value = mock_response
+
+    monkeypatch.setattr("main.genai.Client", lambda api_key: mock_client_instance)
+    monkeypatch.setenv("GEMINI_API_KEY", "fake_test_key")
+
+    payload = {"prompt": "Upbeat synth arpeggio in C major"}
+
+    # Fire 5 valid requests (within limit)
+    for _ in range(5):
+        response = client.post("/api/v1/generate", json=payload)
+        assert response.status_code == 200
+
+    # 6th request should trigger HTTP 429 Rate Limit Exceeded
+    rate_limited_response = client.post("/api/v1/generate", json=payload)
+    assert rate_limited_response.status_code == 429
