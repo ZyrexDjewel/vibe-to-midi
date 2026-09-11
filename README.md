@@ -2,6 +2,10 @@
 
 > An AI-powered microservice translating natural language text prompts into downloadable, binary MIDI files using Google Gemini structured output and FastAPI.
 
+![Build Status](https://img.shields.io/badge/tests-11%20passed-brightgreen)
+![Rate Limiting](https://img.shields.io/badge/rate--limit-5%2Fmin-blue)
+![Python](https://img.shields.io/badge/python-3.9-blue)
+
 ## Features
 - **FastAPI Endpoint:** Streams `.mid` files directly to clients via `POST /api/v1/generate`.
 - **Health & Uptime Monitoring:** Dedicated `/health` route for status checks.
