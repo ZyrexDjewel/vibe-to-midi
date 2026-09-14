@@ -4,6 +4,7 @@ import logging
 import tempfile
 import pretty_midi
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from google import genai
 from google.genai import types
@@ -29,6 +30,14 @@ app = FastAPI(
     title="Vibe-to-MIDI API",
     description="Generate MIDI files from text prompts using Gemini structured output.",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],            # Allows requests from any frontend domain
+    allow_credentials=True,
+    allow_methods=["*"],            # Allows GET, POST, OPTIONS, etc.
+    allow_headers=["*"],
 )
 
 limiter = Limiter(key_func=get_remote_address)
