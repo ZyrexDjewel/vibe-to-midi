@@ -178,3 +178,15 @@ def test_generate_midi_rate_limit(monkeypatch):
     # 6th request should trigger HTTP 429 Rate Limit Exceeded
     rate_limited_response = client.post("/api/v1/generate", json=payload)
     assert rate_limited_response.status_code == 429
+
+def test_cors_preflight_headers():
+    """Verify that CORS middleware returns correct Access-Control headers for preflight requests."""
+    response = client.options(
+        "/api/v1/generate",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
