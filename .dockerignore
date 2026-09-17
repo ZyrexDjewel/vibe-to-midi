@@ -8,3 +8,5 @@ __pycache__/
 .gitignore
 *.mid
 .pytest_cache/
+DOCUMENTATION.md
+README.md
