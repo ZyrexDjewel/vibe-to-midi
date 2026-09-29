@@ -14,9 +14,12 @@ from dotenv import load_dotenv
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from fastapi import Request
+from config import get_settings
 
 load_dotenv()  # Automatically loads variables from .env into os.environ
+
+# Load centralized settings instance
+settings = get_settings()
 
 # Configure structured logging format
 logging.basicConfig(
@@ -27,16 +30,16 @@ logging.basicConfig(
 logger = logging.getLogger("vibe-to-midi")
 
 app = FastAPI(
-    title="Vibe-to-MIDI API",
+    title=settings.app_name,
     description="Generate MIDI files from text prompts using Gemini structured output.",
     version="1.0.0"
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],            # Allows requests from any frontend domain
+    allow_origins=settings.cors_origins,   # Uses list from config
     allow_credentials=True,
-    allow_methods=["*"],            # Allows GET, POST, OPTIONS, etc.
+    allow_methods=["*"],                   # Allows GET, POST, OPTIONS, etc.
     allow_headers=["*"],
 )
 
@@ -59,7 +62,8 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "vibe-to-midi",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "environment": settings.environment
     }
 
 # Request execution timer & status logger middleware
@@ -109,9 +113,9 @@ def remove_file(path: str):
 
 # 2. API Endpoint
 @app.post("/api/v1/generate")
-@limiter.limit("5/minute")
+@limiter.limit(settings.rate_limit_per_minute)
 async def generate_midi(request: Request, payload: VibeRequest, background_tasks: BackgroundTasks):
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY")
     if not api_key:
         logger.error("GEMINI_API_KEY is missing from environment variables.")
         raise HTTPException(

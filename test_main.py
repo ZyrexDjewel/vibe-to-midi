@@ -190,3 +190,14 @@ def test_cors_preflight_headers():
     )
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+def test_health_check_endpoint():
+    """Verify that the health check endpoint returns 200 OK and healthy status."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "healthy",
+        "service": "vibe-to-midi",
+        "version": "1.0.0",
+        "environment": "development"
+    }
