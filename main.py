@@ -95,15 +95,27 @@ class VibeRequest(BaseModel):
         description="General MIDI program number (0-127). Defaults to 38 (Synth Bass 1)."
     )
 
+# Updated Pydantic Schemas for Multi-Track Support
 class MIDINote(BaseModel):
     pitch: int = Field(description="MIDI pitch from 0 to 127")
     start_time: float = Field(description="Start time in seconds")
     end_time: float = Field(description="End time in seconds")
     velocity: int = Field(description="Note volume from 0 to 127")
 
+class TrackStructure(BaseModel):
+    name: str = Field(description="Track name (e.g., 'Bass', 'Lead', 'Drums')")
+    instrument_program: int = Field(
+        default=0, 
+        ge=0, 
+        le=127, 
+        description="General MIDI program number (0-127). For drums, program is ignored if is_drum is True."
+    )
+    is_drum: bool = Field(default=False, description="True if this track is a percussion/drum track (Channel 10).")
+    notes: list[MIDINote] = Field(description="List of notes for this track")
+
 class SongStructure(BaseModel):
     bpm: int = Field(description="Tempo in BPM")
-    notes: list[MIDINote] = Field(description="List of notes")
+    tracks: list[TrackStructure] = Field(description="List of tracks forming the composition")
 
 def remove_file(path: str):
     """Utility to remove temporary files after response streaming."""
@@ -163,20 +175,26 @@ async def generate_midi(request: Request, payload: VibeRequest, background_tasks
         )
 
     try:
-        # Build MIDI file using the user-requested instrument (or default to 38)
+        # Build multi-track MIDI file
         midi = pretty_midi.PrettyMIDI(initial_tempo=song_data.bpm)
-        synth = pretty_midi.Instrument(program=payload.instrument_program)
 
-        for n in song_data.notes:
-            note = pretty_midi.Note(
-                velocity=n.velocity,
-                pitch=n.pitch,
-                start=n.start_time,
-                end=n.end_time
+        for track_data in song_data.tracks:
+            instrument = pretty_midi.Instrument(
+                program=track_data.instrument_program,
+                is_drum=track_data.is_drum,
+                name=track_data.name
             )
-            synth.notes.append(note)
+            
+            for n in track_data.notes:
+                note = pretty_midi.Note(
+                    velocity=n.velocity,
+                    pitch=n.pitch,
+                    start=n.start_time,
+                    end=n.end_time
+                )
+                instrument.notes.append(note)
 
-        midi.instruments.append(synth)
+            midi.instruments.append(instrument)
 
         # Save to a unique temporary file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mid")
