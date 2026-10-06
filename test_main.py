@@ -7,6 +7,11 @@ from google.genai.errors import APIError
 client = TestClient(app)
 
 
+def setup_function():
+    """Reset rate limiter before each test run."""
+    limiter.reset()
+
+
 def test_health_check_or_docs():
     """Verify that the OpenAPI docs endpoint loads successfully."""
     response = client.get("/docs")
@@ -33,15 +38,6 @@ def test_root_404():
     assert response.status_code == 404
 
 
-def test_invalid_instrument_program_validation():
-    """Verify that an out-of-range instrument program (> 127) fails Pydantic validation."""
-    response = client.post(
-        "/api/v1/generate",
-        json={"prompt": "Test loop", "instrument_program": 150},
-    )
-    assert response.status_code == 422
-
-
 def test_prompt_length_validation():
     """Verify that empty strings or excessively long prompts trigger a 422 error."""
     res_short = client.post("/api/v1/generate", json={"prompt": "hi"})
@@ -51,12 +47,26 @@ def test_prompt_length_validation():
     assert res_long.status_code == 422
 
 
+def test_out_of_bounds_target_bpm():
+    """Verify target_bpm outside 40-240 returns 422 Unprocessable Entity."""
+    res_low = client.post(
+        "/api/v1/generate",
+        json={"prompt": "Slow jam", "target_bpm": 30},
+    )
+    assert res_low.status_code == 422
+
+    res_high = client.post(
+        "/api/v1/generate",
+        json={"prompt": "Fast techno", "target_bpm": 300},
+    )
+    assert res_high.status_code == 422
+
+
 @patch("main.genai.Client")
 def test_generate_midi_api_error(mock_genai_client):
     """Verify that upstream Gemini API failures return 502 Bad Gateway."""
     os.environ["GEMINI_API_KEY"] = "fake_test_api_key"
 
-    # Pass code and error payload dictionary to match Google SDK internals
     mock_client_instance = MagicMock()
     mock_client_instance.models.generate_content.side_effect = APIError(
         429, {"message": "Quota exceeded"}
@@ -72,10 +82,8 @@ def test_generate_midi_api_error(mock_genai_client):
 @patch("main.genai.Client")
 def test_generate_midi_success_mocked(mock_genai_client):
     """Verify full end-to-end MIDI generation pipeline with mocked Gemini API."""
-    # 1. Set up fake API key in environment
     os.environ["GEMINI_API_KEY"] = "fake_test_api_key"
 
-    # 2. Build mock JSON response matching Pydantic SongStructure schema
     mock_json_response = """{
         "bpm": 120,
         "tracks": [
@@ -98,8 +106,7 @@ def test_generate_midi_success_mocked(mock_genai_client):
     mock_client_instance.models.generate_content.return_value = mock_response_obj
     mock_genai_client.return_value = mock_client_instance
 
-    # Request MIDI generation with Acoustic Grand Piano (program 0)
-    payload = {"prompt": "Chill piano melody", "instrument_program": 0}
+    payload = {"prompt": "Upbeat synth arpeggio in C major"}
     response = client.post("/api/v1/generate", json=payload)
 
     assert response.status_code == 200
@@ -109,18 +116,18 @@ def test_generate_midi_success_mocked(mock_genai_client):
 
 
 @patch("main.genai.Client")
-def test_generate_midi_custom_instrument(mock_genai_client):
-    """Verify custom General MIDI instrument programs pass validation."""
+def test_generate_midi_with_target_bpm(mock_genai_client):
+    """Verify target_bpm parameter is accepted and processed cleanly."""
     os.environ["GEMINI_API_KEY"] = "fake_test_api_key"
 
     mock_json_response = """{
-        "bpm": 120,
+        "bpm": 140,
         "tracks": [
             {
-                "name": "Piano",
-                "instrument_program": 0,
+                "name": "Synth",
+                "instrument_program": 80,
                 "is_drum": false,
-                "notes": [{"pitch": 60, "start_time": 0.0, "end_time": 0.5, "velocity": 90}]
+                "notes": [{"pitch": 60, "start_time": 0.0, "end_time": 0.5, "velocity": 100}]
             }
         ]
     }"""
@@ -132,9 +139,40 @@ def test_generate_midi_custom_instrument(mock_genai_client):
     mock_client_instance.models.generate_content.return_value = mock_response_obj
     mock_genai_client.return_value = mock_client_instance
 
-    response = client.post(
-        "/api/v1/generate", json={"prompt": "Piano loop", "instrument_program": 0}
-    )
+    payload = {"prompt": "Fast trance arpeggio", "target_bpm": 140}
+    response = client.post("/api/v1/generate", json=payload)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/midi"
+
+
+@patch("main.genai.Client")
+def test_generate_midi_with_key_signature(mock_genai_client):
+    """Verify key_signature constraint parameter is accepted."""
+    os.environ["GEMINI_API_KEY"] = "fake_test_api_key"
+
+    mock_json_response = """{
+        "bpm": 110,
+        "tracks": [
+            {
+                "name": "Pad",
+                "instrument_program": 89,
+                "is_drum": false,
+                "notes": [{"pitch": 57, "start_time": 0.0, "end_time": 2.0, "velocity": 80}]
+            }
+        ]
+    }"""
+
+    mock_response_obj = MagicMock()
+    mock_response_obj.text = mock_json_response
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.models.generate_content.return_value = mock_response_obj
+    mock_genai_client.return_value = mock_client_instance
+
+    payload = {"prompt": "Ambient ambient progression", "key_signature": "A Minor"}
+    response = client.post("/api/v1/generate", json=payload)
+
     assert response.status_code == 200
 
 
@@ -151,9 +189,9 @@ def test_global_exception_handler(mock_genai_client):
     assert response.status_code == 500
     assert response.json() == {"detail": "An unexpected internal server error occurred."}
 
+
 def test_generate_midi_rate_limit(monkeypatch):
     """Verify that exceeding 5 requests per minute returns HTTP 429 Too Many Requests."""
-    # Reset rate limiter storage so previous test runs don't interfere
     limiter.reset()
 
     mock_response = MagicMock()
@@ -185,6 +223,7 @@ def test_generate_midi_rate_limit(monkeypatch):
     # 6th request should trigger HTTP 429 Rate Limit Exceeded
     rate_limited_response = client.post("/api/v1/generate", json=payload)
     assert rate_limited_response.status_code == 429
+
 
 def test_cors_preflight_headers():
     """Verify that CORS middleware returns correct Access-Control headers for preflight requests."""

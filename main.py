@@ -15,6 +15,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from config import get_settings
+from typing import Optional
 
 load_dotenv()  # Automatically loads variables from .env into os.environ
 
@@ -85,14 +86,17 @@ class VibeRequest(BaseModel):
         ...,
         min_length=3,
         max_length=500,
-        json_schema_extra={"example": "Dark synthwave arpeggiated bassline loop at 110 BPM in A minor"}
+        json_schema_extra={"example": "Dark synthwave bassline"}
     )
-    # Expand VibeRequest schema in main.py
-    instrument_program: int = Field(
-        default=38, 
-        ge=0, 
-        le=127, 
-        description="General MIDI program number (0-127). Defaults to 38 (Synth Bass 1)."
+    target_bpm: Optional[int] = Field(
+        default=None,
+        ge=40,
+        le=240,
+        description="Optional target BPM (40-240)"
+    )
+    key_signature: Optional[str] = Field(
+        default=None,
+        description="Optional key constraint (e.g., 'C Major', 'A Minor')"
     )
 
 # Updated Pydantic Schemas for Multi-Track Support
