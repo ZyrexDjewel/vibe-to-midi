@@ -236,3 +236,34 @@ def test_cors_preflight_headers():
     )
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+from main import sanitize_and_quantize_tracks, TrackStructure, MIDINote
+
+def test_midi_sanitization_and_quantization():
+    """Verify that pitch/velocity clamping and time quantization work correctly."""
+    raw_tracks = [
+        TrackStructure(
+            name="Test Track",
+            instrument_program=0,
+            is_drum=False,
+            notes=[
+                # Pitch > 127, velocity < 1, end_time <= start_time
+                MIDINote(pitch=150, start_time=-0.02, end_time=0.0, velocity=-10),
+                # Valid note requiring grid snapping
+                MIDINote(pitch=60, start_time=0.123, end_time=0.498, velocity=90),
+            ]
+        )
+    ]
+
+    sanitized = sanitize_and_quantize_tracks(tracks=raw_tracks, bpm=120)
+    notes = sanitized[0].notes
+
+    # Assert Note 1 was clamped and given valid duration
+    assert notes[0].pitch == 127
+    assert notes[0].velocity == 1
+    assert notes[0].start_time == 0.0
+    assert notes[0].end_time > notes[0].start_time
+
+    # Assert Note 2 was snapped to grid steps
+    assert notes[1].start_time == 0.125  # 1/16th note step at 120 BPM
+    assert notes[1].end_time == 0.5

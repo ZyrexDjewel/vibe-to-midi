@@ -3,6 +3,7 @@ import time
 import logging
 import tempfile
 import pretty_midi
+from typing import Optional
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -15,7 +16,6 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from config import get_settings
-from typing import Optional
 
 load_dotenv()  # Automatically loads variables from .env into os.environ
 
@@ -127,7 +127,44 @@ def remove_file(path: str):
         os.remove(path)
 
 
-# 2. API Endpoint
+# 2. Sanitization & Quantization Utility
+def sanitize_and_quantize_tracks(
+    tracks: list[TrackStructure], bpm: int, grid_division: int = 16
+) -> list[TrackStructure]:
+    """
+    Sanitizes raw AI output and quantizes note start/end times to a grid.
+    - Clamps pitch (0-127) and velocity (1-127)
+    - Fixes zero/negative duration notes
+    - Quantizes start and end times to the nearest grid step (default: 16th notes)
+    """
+    seconds_per_beat = 60.0 / bpm
+    grid_step_seconds = (seconds_per_beat * 4) / grid_division
+    min_note_duration = max(0.05, grid_step_seconds / 2)
+
+    for track in tracks:
+        for note in track.notes:
+            # Clamp pitch and velocity to safe General MIDI ranges
+            note.pitch = max(0, min(127, note.pitch))
+            note.velocity = max(1, min(127, note.velocity))
+
+            # Prevent negative start times
+            note.start_time = max(0.0, note.start_time)
+
+            # Quantize times to nearest grid step
+            quantized_start = round(note.start_time / grid_step_seconds) * grid_step_seconds
+            quantized_end = round(note.end_time / grid_step_seconds) * grid_step_seconds
+
+            # Ensure end time strictly follows start time with minimum duration
+            if quantized_end <= quantized_start:
+                quantized_end = quantized_start + min_note_duration
+
+            note.start_time = round(quantized_start, 4)
+            note.end_time = round(quantized_end, 4)
+
+    return tracks
+
+
+# 3. API Endpoint
 @app.post("/api/v1/generate")
 @limiter.limit(settings.rate_limit_per_minute)
 async def generate_midi(request: Request, payload: VibeRequest, background_tasks: BackgroundTasks):
@@ -140,13 +177,20 @@ async def generate_midi(request: Request, payload: VibeRequest, background_tasks
         )
 
     try:
+        # Build prompt with optional user constraints
+        full_prompt = payload.prompt
+        if payload.target_bpm:
+            full_prompt += f" Target tempo: {payload.target_bpm} BPM."
+        if payload.key_signature:
+            full_prompt += f" Target key signature: {payload.key_signature}."
+
         # Initialize Gemini Client
         client = genai.Client(api_key=api_key)
 
         # Generate structured note array
         response = client.models.generate_content(
             model='gemini-3.6-flash',
-            contents=payload.prompt,
+            contents=full_prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=SongStructure,
@@ -179,10 +223,15 @@ async def generate_midi(request: Request, payload: VibeRequest, background_tasks
         )
 
     try:
+        # Sanitize and quantize raw notes before building MIDI
+        sanitized_tracks = sanitize_and_quantize_tracks(
+            tracks=song_data.tracks, bpm=song_data.bpm
+        )
+
         # Build multi-track MIDI file
         midi = pretty_midi.PrettyMIDI(initial_tempo=song_data.bpm)
 
-        for track_data in song_data.tracks:
+        for track_data in sanitized_tracks:
             instrument = pretty_midi.Instrument(
                 program=track_data.instrument_program,
                 is_drum=track_data.is_drum,
