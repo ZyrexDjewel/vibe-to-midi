@@ -267,3 +267,48 @@ def test_midi_sanitization_and_quantization():
     # Assert Note 2 was snapped to grid steps
     assert notes[1].start_time == 0.125  # 1/16th note step at 120 BPM
     assert notes[1].end_time == 0.5
+
+@patch("main.genai.Client")
+def test_async_job_lifecycle(mock_genai_client):
+    """Verify asynchronous job submission, status polling, and MIDI file download."""
+    os.environ["GEMINI_API_KEY"] = "fake_test_api_key"
+
+    mock_json_response = """{
+        "bpm": 128,
+        "tracks": [
+            {
+                "name": "Synth",
+                "instrument_program": 81,
+                "is_drum": false,
+                "notes": [{"pitch": 60, "start_time": 0.0, "end_time": 1.0, "velocity": 100}]
+            }
+        ]
+    }"""
+
+    mock_response_obj = MagicMock()
+    mock_response_obj.text = mock_json_response
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.models.generate_content.return_value = mock_response_obj
+    mock_genai_client.return_value = mock_client_instance
+
+    # 1. Submit job (POST /api/v1/jobs)
+    res_submit = client.post("/api/v1/jobs", json={"prompt": "Synth lead riff"})
+    assert res_submit.status_code == 202
+    job_id = res_submit.json()["job_id"]
+
+    # 2. Poll job status (GET /api/v1/jobs/{job_id})
+    res_status = client.get(f"/api/v1/jobs/{job_id}")
+    assert res_status.status_code == 200
+    assert res_status.json()["status"] in ["PENDING", "PROCESSING", "COMPLETED"]
+
+    # 3. Download generated file (GET /api/v1/jobs/{job_id}/download)
+    res_download = client.get(f"/api/v1/jobs/{job_id}/download")
+    assert res_download.status_code == 200
+    assert res_download.headers["content-type"] == "audio/midi"
+
+
+def test_job_not_found():
+    """Verify 404 response for invalid job IDs."""
+    response = client.get("/api/v1/jobs/non-existent-id")
+    assert response.status_code == 404

@@ -1,9 +1,10 @@
 import os
 import time
+import uuid
 import logging
 import tempfile
 import pretty_midi
-from typing import Optional
+from typing import Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -121,6 +122,16 @@ class SongStructure(BaseModel):
     bpm: int = Field(description="Tempo in BPM")
     tracks: list[TrackStructure] = Field(description="List of tracks forming the composition")
 
+class JobStatus(BaseModel):
+    job_id: str
+    status: str  # "PENDING", "PROCESSING", "COMPLETED", "FAILED"
+    error: Optional[str] = None
+    created_at: float
+    updated_at: float
+
+# In-memory storage for async generation jobs
+jobs_db: Dict[str, Dict[str, Any]] = {}
+
 def remove_file(path: str):
     """Utility to remove temporary files after response streaming."""
     if os.path.exists(path):
@@ -164,7 +175,72 @@ def sanitize_and_quantize_tracks(
     return tracks
 
 
-# 3. API Endpoint
+# 3. Async Background Job Worker
+async def process_midi_job(job_id: str, payload: VibeRequest):
+    """Executes heavy Gemini generation and MIDI writing in the background."""
+    jobs_db[job_id]["status"] = "PROCESSING"
+    jobs_db[job_id]["updated_at"] = time.time()
+
+    api_key = settings.gemini_api_key or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        jobs_db[job_id]["status"] = "FAILED"
+        jobs_db[job_id]["error"] = "GEMINI_API_KEY environment variable missing"
+        return
+
+    try:
+        full_prompt = payload.prompt
+        if payload.target_bpm:
+            full_prompt += f" Target tempo: {payload.target_bpm} BPM."
+        if payload.key_signature:
+            full_prompt += f" Target key signature: {payload.key_signature}."
+
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model='gemini-3.6-flash',
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=SongStructure,
+                temperature=0.7,
+            ),
+        )
+
+        song_data = SongStructure.model_validate_json(response.text)
+        sanitized_tracks = sanitize_and_quantize_tracks(
+            tracks=song_data.tracks, bpm=song_data.bpm
+        )
+
+        midi = pretty_midi.PrettyMIDI(initial_tempo=song_data.bpm)
+        for track_data in sanitized_tracks:
+            instrument = pretty_midi.Instrument(
+                program=track_data.instrument_program,
+                is_drum=track_data.is_drum,
+                name=track_data.name
+            )
+            for n in track_data.notes:
+                instrument.notes.append(
+                    pretty_midi.Note(velocity=n.velocity, pitch=n.pitch, start=n.start_time, end=n.end_time)
+                )
+            midi.instruments.append(instrument)
+
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mid")
+        midi.write(temp_file.name)
+        temp_file.close()
+
+        jobs_db[job_id]["status"] = "COMPLETED"
+        jobs_db[job_id]["file_path"] = temp_file.name
+        jobs_db[job_id]["updated_at"] = time.time()
+
+    except Exception as e:
+        logger.error(f"Async job {job_id} failed: {str(e)}")
+        jobs_db[job_id]["status"] = "FAILED"
+        jobs_db[job_id]["error"] = str(e)
+        jobs_db[job_id]["updated_at"] = time.time()
+
+
+# 4. API Endpoints
+
+# Synchronous generation endpoint
 @app.post("/api/v1/generate")
 @limiter.limit(settings.rate_limit_per_minute)
 async def generate_midi(request: Request, payload: VibeRequest, background_tasks: BackgroundTasks):
@@ -239,14 +315,9 @@ async def generate_midi(request: Request, payload: VibeRequest, background_tasks
             )
             
             for n in track_data.notes:
-                note = pretty_midi.Note(
-                    velocity=n.velocity,
-                    pitch=n.pitch,
-                    start=n.start_time,
-                    end=n.end_time
+                instrument.notes.append(
+                    pretty_midi.Note(velocity=n.velocity, pitch=n.pitch, start=n.start_time, end=n.end_time)
                 )
-                instrument.notes.append(note)
-
             midi.instruments.append(instrument)
 
         # Save to a unique temporary file
@@ -254,10 +325,8 @@ async def generate_midi(request: Request, payload: VibeRequest, background_tasks
         midi.write(temp_file.name)
         temp_file.close()
 
-        # Schedule automatic cleanup after response streaming completes
         background_tasks.add_task(remove_file, temp_file.name)
 
-        # Return file as downloadable attachment
         return FileResponse(
             path=temp_file.name,
             filename="vibe.mid",
@@ -266,3 +335,71 @@ async def generate_midi(request: Request, payload: VibeRequest, background_tasks
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Async generation endpoint
+@app.post("/api/v1/jobs", status_code=202)
+@limiter.limit(settings.rate_limit_per_minute)
+async def create_midi_job(request: Request, payload: VibeRequest, background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+    now = time.time()
+
+    jobs_db[job_id] = {
+        "job_id": job_id,
+        "status": "PENDING",
+        "error": None,
+        "file_path": None,
+        "created_at": now,
+        "updated_at": now
+    }
+
+    background_tasks.add_task(process_midi_job, job_id, payload)
+
+    return {
+        "job_id": job_id,
+        "status": "PENDING",
+        "status_url": f"/api/v1/jobs/{job_id}",
+        "download_url": f"/api/v1/jobs/{job_id}/download"
+    }
+
+
+# Job status polling endpoint
+@app.get("/api/v1/jobs/{job_id}", response_model=JobStatus)
+async def get_job_status(job_id: str):
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs_db[job_id]
+    return JobStatus(
+        job_id=job["job_id"],
+        status=job["status"],
+        error=job["error"],
+        created_at=job["created_at"],
+        updated_at=job["updated_at"]
+    )
+
+
+# Job download endpoint
+@app.get("/api/v1/jobs/{job_id}/download")
+async def download_job_midi(job_id: str, background_tasks: BackgroundTasks):
+    if job_id not in jobs_db:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs_db[job_id]
+
+    if job["status"] in ["PENDING", "PROCESSING"]:
+        raise HTTPException(status_code=400, detail="Job is still processing")
+    if job["status"] == "FAILED":
+        raise HTTPException(status_code=500, detail=f"Job generation failed: {job['error']}")
+
+    file_path = job.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Generated MIDI file no longer exists")
+
+    background_tasks.add_task(remove_file, file_path)
+
+    return FileResponse(
+        path=file_path,
+        filename=f"vibe_{job_id[:8]}.mid",
+        media_type="audio/midi"
+    )
